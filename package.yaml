@@ -1,0 +1,13 @@
+project-id: <insert your project id from curseforge, the destination target>
+name: <project name, this is used for filenames and stuff>
+version: <addon version>
+variables: #optional!
+  variable_name: value # @@variable_name@@ will be replaced by value in source files
+  # @@addon_version@@ is a predefined variable that contains the version
+  # @@toc_version_retail@@ contains UI version for retail
+  # @@toc_version_classic@@ contains UI version for classic
+export:
+  MainAddonFolder: src       # Moves src folder to MainAddonFolder/ in the package
+  MainAddonFolder/libs: libs # Moves libs folder to MainAddonFolder/libs in the package
+run: # optional!
+ - echo execute this command

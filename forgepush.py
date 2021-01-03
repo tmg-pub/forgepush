@@ -1,4 +1,4 @@
-# forgepush 1.0 
+# forgepush 1.0.1
 # Packages a release and pushes it to CurseForge.
 #
 # (C) 2020 tmg <tmg@clubtammy.info>
@@ -30,24 +30,27 @@ LOCALES = [
    "zhTW", "ruRU", "esES", "esMX", "ptBR"
 ]
 
-EXIT_CODE_NO_API_TOKEN      = -11
-EXIT_CODE_UNCLEAN_WD_CANCEL = -20
 EXIT_CODE_ALREADY_PUBLISHED = -10
-EXIT_CODE_FAILED_UPLOAD     = -40
+EXIT_CODE_GITTAG            = -11
+EXIT_CODE_UNCLEAN_WD_CANCEL = -12
+EXIT_CODE_NO_API_TOKEN      = -21
+EXIT_CODE_FAILED_UPLOAD     = -50
 
 CACHEFILE              = ".forgepush.cache"
 DEFAULT_PACKAGE_FOLDER = ".forgepush"
 
 #----------------------------------------------------------------------------------------
 command_args = argparse.ArgumentParser( description="Push a package to CurseForge." )
-command_args.add_argument('--apitoken', '-a',
-   help='CurseForge API token to use. Can also set CURSEFORGE_API_TOKEN environment variable.')
-command_args.add_argument('--publish', action='store_true',
-   help='Publish the package to CurseForge (otherwise this only packages locally for testing).')
-command_args.add_argument('--yesokay', '-y', action='store_true',
-   help='Skip the confirmation check for publishing.')
-command_args.add_argument('--toc',
-   help='Set what TOC version to use.')
+command_args.add_argument( '--apitoken', '-a',
+   help='CurseForge API token to use. Can also set CURSEFORGE_API_TOKEN environment variable.' )
+command_args.add_argument( '--publish', action='store_true',
+   help='Publish the package to CurseForge (otherwise this only packages locally for testing).' )
+command_args.add_argument( '--yesokay', '-y', action='store_true',
+   help='Skip the confirmation check for publishing.' )
+command_args.add_argument( '--toc',
+   help='Set what TOC version to use.' )
+command_args.add_argument( '--notag', action='store_true',
+   help='Do not add a git tag when publishing.' )
 
 command_args = command_args.parse_args()
 
@@ -60,6 +63,9 @@ if not forgetoken:
 
 with open( "package.yaml", "r", encoding="utf-8" ) as file:
    config = yaml.safe_load( file )
+
+# Make sure version is a string.
+config['version'] = str(config['version'])
 
 # Predefined variables:
 if not config.get( "variables", None ): config["variables"] = {}
@@ -296,29 +302,36 @@ print( "Publishing to CurseForge." )
 
 if check_published( config["version"] ):
    print( "- This version is already marked as published." )
-   print( "- To republish it, delete .forgepush-published" )
+   print( f"- To republish it, delete {CACHEFILE}" )
    exit( EXIT_CODE_ALREADY_PUBLISHED )
 
-print( " - Zipping." )
+gitstatus = subprocess.check_output( ["git", "status", "-s"] ).strip()
+if gitstatus != b"":
+   r = get_yesno( " - Working directory is not clean. Continue anyway? (y/n) " )
+   if not r:
+      print( " - Cancelled." )
+      exit( EXIT_CODE_UNCLEAN_WD_CANCEL )
+
+if not command_args.notag:
+   try:
+      print( " - Tagging..." )
+      subprocess.check_output( ["git", "tag", config["version"]] )
+   except subprocess.CalledProcessError:
+      r = get_yesno( " - Couldn't add git tag. You need to change the version number. Proceed anyway? (y/n) " )
+      if not r:
+         exit( EXIT_CODE_GITTAG )
+
 zip_path = f"{config['name']}-{config['version']}.zip"
+print( f" - Zipping: {zip_path}" )
 zip_package( zip_path )
 
 if not command_args.yesokay:
-   gitstatus = subprocess.check_output( ["git", "status", "-s"] )
-   if gitstatus != "":
-      r = get_yesno( " - Working directory is not clean. Continue anyway? (y/n) " )
-      if not r:
-         print( " - Cancelled." )
-         exit( EXIT_CODE_UNCLEAN_WD_CANCEL )
-   
-   print( f" - You can view the package under ./{package_folder} before publishing." )
+   print( f" - You can view the package under {package_folder}/ before publishing." )
    if config.get( "classic", False ):
-      print( f" - Current UI version is {cache['toc_classic']}. If incorrect, cancel this, correct Wowpedia, and delete .forgepush.cache." )
+      print( f" - Current UI version is {cache['toc_classic']}. If incorrect, cancel this, correct Wowpedia, and delete {CACHEFILE}." )
    else:
-      print( f" - Current UI version is {cache['toc_retail']}. If incorrect, cancel this, correct Wowpedia, and delete .forgepush.cache." )
+      print( f" - Current UI version is {cache['toc_retail']}. If incorrect, cancel this, correct Wowpedia, and delete {CACHEFILE}." )
    input( " - Press any key to continue or Ctrl+C to cancel." )
-
-   
 
 print( " - Fetching game version data from CurseForge..." )
 version_data = json.loads(curse_request( f"/api/game/versions" ))
