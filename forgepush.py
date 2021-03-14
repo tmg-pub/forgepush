@@ -35,6 +35,7 @@ EXIT_CODE_GITTAG            = -11
 EXIT_CODE_UNCLEAN_WD_CANCEL = -12
 EXIT_CODE_NO_API_TOKEN      = -21
 EXIT_CODE_FAILED_UPLOAD     = -50
+EXIT_CODE_NETWORK_ERROR     = -51
 
 CACHEFILE              = ".forgepush.cache"
 DEFAULT_PACKAGE_FOLDER = ".forgepush"
@@ -97,6 +98,12 @@ def save_cache():
    with open( CACHEFILE, "w", encoding="utf-8" ) as f:
       json.dump( cache, f, indent = 3 )
 
+class HttpError(ValueError):
+    def __init__(self, code, message):
+        self.code    = code
+        self.message = message
+        super().__init__(self.message)
+
 #----------------------------------------------------------------------------------------
 # Makes a request to the CurseForge API.
 def curse_request( endpoint, method = "GET", query = None, body = None, extra_headers = {} ):
@@ -109,8 +116,8 @@ def curse_request( endpoint, method = "GET", query = None, body = None, extra_he
    response = requests.request( method, "https://wow.curseforge.com" + endpoint,
                                 params=query, headers=headers )
    if response.status_code != 200:
-      print( "HTTP error.", response.status, response.read() )
-      raise ValueError( "Failed to make request to Curse endpoint." )
+      #print( "HTTP error.", response.status_code, response.reason )
+      raise HttpError( response.status_code, response.reason ) #"Failed to make request to Curse endpoint." )
    return response.text
 
 #----------------------------------------------------------------------------------------
@@ -128,14 +135,22 @@ def fetch_localizations():
    for locale in LOCALES:
       
       print( f" - Fetching {locale} data from CurseForge." )
-      endpoint = f"/api/projects/{config['project-id']}/localization/export"
-      data[locale] = curse_request( endpoint, query = {
-         "export-type" : "Table",
-         "lang"        : locale,
-         "unlocalized" : "Ignore",
-      })[4:]
-      # Snip off the "L = "
-
+      try:
+         endpoint = f"/api/projects/{config['project-id']}/localization/export"
+         data[locale] = curse_request( endpoint, query = {
+            "export-type" : "Table",
+            "lang"        : locale,
+            "unlocalized" : "Ignore",
+         })[4:]
+         # Snip off the "L = "
+      except HttpError as e:
+         if e.code == 403:
+            # Forbidden, which means the localizations likely don't exist.
+            # Skip them for this entry.
+            print( f" - Not accessible. (Likely not enabled.)" )
+         else:
+            print( f"- Can't get localization data from Curse." )
+            exit( EXIT_CODE_NETWORK_ERROR )
    cache["localization_time"] = time.time()
    cache["localization_data"] = data
 
