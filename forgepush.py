@@ -377,7 +377,19 @@ def publish_to_github():
          "tag_name": config["version"],
          "name": release_name
       },
-   )
+   ).json()
+
+   zip_path = f"{config['name']}-{config['version']}.zip"
+   print( f" - Zipping: {zip_path}" )
+   zip_package( zip_path )
+
+   with open(zip_package, "rb") as f:
+      requests.post(response.upload_path.replace("{?name,label}", f"?name={zip_path}"),
+         headers = {
+            "Content-Type": "application/zip",
+            "Authorization" : "token " + command_args.github_token
+         },
+         data = f)
 
 if command_args.publish_curseforge:
    publish_to_curseforge()
