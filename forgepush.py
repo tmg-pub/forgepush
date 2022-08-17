@@ -366,7 +366,7 @@ def publish_to_github():
    tagname = config["version"]
    
    release_name = config["name"] + " " + tagname
-   repo = config["github_repo"]
+   repo = command_args.github_repo
 
    response = requests.post(
       f"https://api.github.com/repos/{repo}/releases",
