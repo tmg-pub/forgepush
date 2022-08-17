@@ -380,14 +380,14 @@ def publish_to_github():
       },
    ).json()
    print("Got response from github:", response)
-   
+
    zip_path = f"{config['name']}-{tagname}.zip"
    print( f"zipping: {zip_path}" )
    zip_package( zip_path )
 
    with open(zip_path, "rb") as f:
-      print("uploading asset to", response["upload_path"])
-      print(requests.post(response["upload_path"].replace("{?name,label}", f"?name={zip_path}"),
+      print("uploading asset to", response["upload_url"])
+      print(requests.post(response["upload_url"].replace("{?name,label}", f"?name={zip_path}"),
          headers = {
             "Content-Type": "application/zip",
             "Authorization" : "token " + command_args.github_token
