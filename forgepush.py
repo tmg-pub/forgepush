@@ -49,6 +49,8 @@ command_args.add_argument( '--addonversion', default="dev",
    help="What addon version to write in the files.")
 command_args.add_argument( '--create_github_release', action='store_true',
    help="If set, creates a github release.")
+command_args.add_argument( '--github_repo',
+   help="Sets the github repo to use.")
 
 command_args = command_args.parse_args()
 
@@ -362,15 +364,12 @@ def publish_to_curseforge():
 #-----------------------------------------------------------------------------------------
 def publish_to_github():
    tagname = config["version"]
-
-   parse_github = re.match(r"^https://github.com/([^/]+)/([^/]+)$", config["github"])
-   github_owner = parse_github.group(1)
-   github_repo  = parse_github.group(2)
    
    release_name = config["name"] + " " + tagname
+   repo = config["github_repo"]
 
    response = requests.post(
-      f"https://api.github.com/repos/{github_owner}/{github_repo}/releases",
+      f"https://api.github.com/repos/{repo}/releases",
       headers = {
          "Accept": "application/vnd.github+json",
          "Authorization" : "token " + command_args.github_token
