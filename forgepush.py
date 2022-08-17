@@ -277,6 +277,9 @@ def write_published( version ):
    cache["curse-published"] = cache.get( "curse-published", {} )
    cache["curse-published"][version] = True
 
+def get_changelog():
+   return subprocess.check_output( ["git", "log", "-10", '--pretty=format:%s [%an] - %as%n%b'] ).decode('utf-8')
+
 #-----------------------------------------------------------------------------------------
 def publish_to_curseforge():
    print( "Publishing to CurseForge." )
@@ -333,10 +336,8 @@ def publish_to_curseforge():
 
    print( " - Uploading..." )
 
-   gitlog = subprocess.check_output( ["git", "log", "-10", '--pretty=format:"%s [%an] - %as%n%b"'] ).decode('utf-8')
-
    metadata = json.dumps({
-      "changelog"    : gitlog,
+      "changelog"    : get_changelog(),
       "changelogType" : "text",
       "displayName"  : config['version'],
       "gameVersions" : gameVersions,
@@ -376,7 +377,8 @@ def publish_to_github():
       },
       json = {
          "tag_name": tagname,
-         "name": release_name
+         "name": release_name,
+         "body": get_changelog()
       },
    ).json()
    print("Got response from github:", response)
