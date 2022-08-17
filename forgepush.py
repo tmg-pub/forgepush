@@ -1,7 +1,7 @@
-# forgepush 1.0.1
-# Packages a release and pushes it to CurseForge.
+# forgepush 1.1.1
+# Packages WoW addon releases.
 #
-# (C) 2020 tmg <tmg@clubtammy.info>
+# (C) 2022 tmg <tmg@clubtammy.info>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this
 # software and associated documentation files (the "Software"), to deal in the Software
@@ -20,15 +20,8 @@
 # OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 # OTHER DEALINGS IN THE SOFTWARE.
 
-import argparse, random, yaml, os, shutil, re, json, urllib, time, zipfile, requests, subprocess
-from http.client import HTTPSConnection
+import argparse, yaml, os, shutil, re, json, time, zipfile, requests, subprocess
 from pathlib import Path
-
-#----------------------------------------------------------------------------------------
-LOCALES = [ 
-   "frFR", "deDE", "itIT", "koKR", "zhCN",
-   "zhTW", "ruRU", "esES", "esMX", "ptBR"
-]
 
 EXIT_CODE_ALREADY_PUBLISHED = -10
 EXIT_CODE_GITTAG            = -11
@@ -42,31 +35,34 @@ DEFAULT_PACKAGE_FOLDER = ".forgepush"
 
 #----------------------------------------------------------------------------------------
 command_args = argparse.ArgumentParser( description="Push a package to CurseForge." )
-command_args.add_argument( '--apitoken', '-a',
+command_args.add_argument( '--curse_apitoken', '-a',
    help='CurseForge API token to use. Can also set CURSEFORGE_API_TOKEN environment variable.' )
-command_args.add_argument( '--publish', action='store_true',
-   help='Publish the package to CurseForge (otherwise this only packages locally for testing).' )
+command_args.add_argument( '--github_token',
+   help='GitHub API token to use.' )
+command_args.add_argument( '--publish_curseforge', action='store_true',
+   help='Publish the package to CurseForge.' )
 command_args.add_argument( '--yesokay', '-y', action='store_true',
    help='Skip the confirmation check for publishing.' )
 command_args.add_argument( '--toc',
    help='Set what TOC version to use.' )
-command_args.add_argument( '--notag', action='store_true',
-   help='Do not add a git tag when publishing.' )
+command_args.add_argument( '--addonversion', default="dev",
+   help="What addon version to write in the files.")
+command_args.add_argument( '--create_github_release', action='store_true',
+   help="If set, creates a github release.")
 
 command_args = command_args.parse_args()
 
-forgetoken = command_args.apitoken
+forgetoken = command_args.curse_apitoken
 if not forgetoken:
    forgetoken = os.environ.get( "CURSEFORGE_API_TOKEN" )
 if not forgetoken:
-   print( "No API token to use. Set it via --apitoken or env var CURSEFORGE_API_TOKEN." )
+   print( "No API token to use. Set it via --curse_apitoken or env var CURSEFORGE_API_TOKEN." )
    exit( EXIT_CODE_NO_API_TOKEN )
 
 with open( "package.yaml", "r", encoding="utf-8" ) as file:
    config = yaml.safe_load( file )
 
-# Make sure version is a string.
-config['version'] = str(config['version'])
+config['version'] = command_args.addonversion
 
 # Predefined variables:
 if not config.get( "variables", None ): config["variables"] = {}
@@ -120,42 +116,6 @@ def curse_request( endpoint, method = "GET", query = None, body = None, extra_he
       raise HttpError( response.status_code, response.reason ) #"Failed to make request to Curse endpoint." )
    return response.text
 
-#----------------------------------------------------------------------------------------
-def fetch_localizations():
-   print( "Fetching localizations." )
-
-   age_minutes = int(time.time() - cache.get( "localization_time", 0 )) // 60
-
-   if age_minutes < 60*6:
-      # Only load every 6 hours.
-      return
-      
-   data = {}
-
-   for locale in LOCALES:
-      
-      print( f" - Fetching {locale} data from CurseForge." )
-      try:
-         endpoint = f"/api/projects/{config['project-id']}/localization/export"
-         data[locale] = curse_request( endpoint, query = {
-            "export-type" : "Table",
-            "lang"        : locale,
-            "unlocalized" : "Ignore",
-         })[4:]
-         # Snip off the "L = "
-      except HttpError as e:
-         if e.code == 403:
-            # Forbidden, which means the localizations likely don't exist.
-            # Skip them for this entry.
-            print( f" - Not accessible. (Likely not enabled.)" )
-         else:
-            print( f"- Can't get localization data from Curse." )
-            exit( EXIT_CODE_NETWORK_ERROR )
-   cache["localization_time"] = time.time()
-   cache["localization_data"] = data
-
-fetch_localizations()
-
 def fetch_toc_versions():
    age_minutes = int(time.time() - cache.get( "toc_time", 0 )) // 60
    if age_minutes < 60*2:
@@ -188,16 +148,6 @@ config["variables"]["toc_version_retail"] = command_args.toc or cache["toc_retai
 config["variables"]["toc_version_classic"] = command_args.toc or cache["toc_classic"]
 
 #----------------------------------------------------------------------------------------
-def format_localizations( table_name ):
-   output = []
-
-   for locale in LOCALES:
-      tname = table_name.replace( "{lang}", locale )
-      output.append( f"{tname} = {cache['localization_data'][locale]}" )
-   
-   return "\n".join(output)
-
-#----------------------------------------------------------------------------------------
 def replace_variable( term ):
    if not term in config["variables"]:
       raise ValueError( f"Unknown variable found: {term}." )
@@ -205,15 +155,44 @@ def replace_variable( term ):
       return str(config["variables"][term])
 
 #----------------------------------------------------------------------------------------
-def replace_command( input ):
-   cmd = re.match( r"^insert-localizations (\S+)\s*$", input )
+def include_file(fromfile, file):
+   path = os.path.join(os.path.dirname(fromfile), file)
+   with open(path, "r", encoding="utf-8") as f:
+      content = f.read()
+
+   content, changes = postprocess_content(path, content)
+   return content
+
+#----------------------------------------------------------------------------------------
+def replace_command(path, input):
+   cmd = re.match(r"^include\s*(.*)\s*$", input)
    if cmd:
-      return format_localizations( cmd.group(1) )
+      return include_file(path, cmd.group(1))
 
    raise ValueError( f"Unknown command: {input}" )
 
 #----------------------------------------------------------------------------------------
-def postprocess( path ):
+def postprocess_content(path, input):
+   try:
+      changes = False
+      r = input
+      r = re.sub( "@@(.+?)@@",
+                  lambda match : replace_variable( match.group(1) ), r )
+      # We don't want to match newlines in padding.
+      r = re.sub( r"^[ \t]*--@(.+)@[ \t]*$",
+                  lambda match : replace_command(path, match.group(1) ),
+                  r,
+                  flags=re.MULTILINE )
+      
+      if input != r:
+         changes = True
+
+   except ValueError as e:
+      print( "Error processing {path}.", e )
+   return r, changes
+
+#----------------------------------------------------------------------------------------
+def postprocess(path):
    # Read file contents.
 
    if path.suffix not in [".txt", ".lua", ".toc"]:
@@ -226,24 +205,11 @@ def postprocess( path ):
    with open( path, "r", encoding="utf-8" ) as file:
       contents = file.read()
 
-   changed = False
+   contents, changes = postprocess_content(path, contents)
 
-   try:
-      r = contents
-      r = re.sub( "@@(.+?)@@",
-                  lambda match : replace_variable( match.group(1) ), r )
-      # We don't want to match newlines in padding.
-      r = re.sub( r"^[ \t]*--@(.+)@[ \t]*$",
-                  lambda match : replace_command( match.group(1) ),
-                  r,
-                  flags=re.MULTILINE )
-      
-      if contents != r:
-         with open( path, "w", encoding="utf-8" ) as file:
-            file.write( r )
-
-   except ValueError as e:
-      print( "Error processing {path}.", e )
+   if changes:
+      with open( path, "w", encoding="utf-8" ) as file:
+         file.write( contents )
 
 #----------------------------------------------------------------------------------------
 def process_files( path ):
@@ -302,105 +268,121 @@ def get_yesno( prompt ):
       if r == "n" or r == "N": return False
 
 def check_published( version ):
-   cache["published"] = cache.get( "published", {} )
-   if cache["published"].get( version, False ):
+   cache["curse-published"] = cache.get( "curse-published", {} )
+   if cache["curse-published"].get( version, False ):
       return True
    return False
 
 def write_published( version ):
-   cache["published"] = cache.get( "published", {} )
-   cache["published"][version] = True
+   cache["curse-published"] = cache.get( "curse-published", {} )
+   cache["curse-published"][version] = True
 
-if not command_args.publish: exit( 0 )
+#-----------------------------------------------------------------------------------------
+def publish_to_curseforge():
+   print( "Publishing to CurseForge." )
+   if check_published( config["version"] ):
+      print( "- This version is already marked as published." )
+      print( f"- To republish it, delete {CACHEFILE}" )
+      return
+   gitstatus = subprocess.check_output( ["git", "status", "-s"] ).strip()
+   if gitstatus != b"":
+      print( " - Working directory is not clean. Not continuing." )
+      return False
 
-print( "Publishing to CurseForge." )
+   zip_path = f"{config['name']}-{config['version']}.zip"
+   print( f" - Zipping: {zip_path}" )
+   zip_package( zip_path )
 
-if check_published( config["version"] ):
-   print( "- This version is already marked as published." )
-   print( f"- To republish it, delete {CACHEFILE}" )
-   exit( EXIT_CODE_ALREADY_PUBLISHED )
+   if not command_args.yesokay:
+      print( f" - You can view the package under {package_folder}/ before publishing." )
+      if config.get( "classic", False ):
+         print( f" - Current UI version is {cache['toc_classic']}. If incorrect, cancel this, correct Wowpedia, and delete {CACHEFILE}." )
+      else:
+         print( f" - Current UI version is {cache['toc_retail']}. If incorrect, cancel this, correct Wowpedia, and delete {CACHEFILE}." )
+      input( " - Press any key to continue or Ctrl+C to cancel." )
 
-gitstatus = subprocess.check_output( ["git", "status", "-s"] ).strip()
-if gitstatus != b"":
-   r = get_yesno( " - Working directory is not clean. Continue anyway? (y/n) " )
-   if not r:
-      print( " - Cancelled." )
-      exit( EXIT_CODE_UNCLEAN_WD_CANCEL )
+   print( " - Fetching game version data from CurseForge..." )
+   version_data = json.loads(curse_request( f"/api/game/versions" ))
 
-if not command_args.notag:
-   try:
-      print( " - Tagging..." )
-      subprocess.check_output( ["git", "tag", config["version"]] )
-   except subprocess.CalledProcessError:
-      r = get_yesno( " - Couldn't add git tag. You need to change the version number. Proceed anyway? (y/n) " )
-      if not r:
-         exit( EXIT_CODE_GITTAG )
+   # 517 is wow retail, 67408 is wow classic
+   latest_classic = [x for x in version_data if x["gameVersionTypeID"] == 67408]
+   latest_classic.sort( reverse=True, key=lambda x : x["id"] )
+   latest_classic = latest_classic[0]
+   latest_retail = [x for x in version_data if x["gameVersionTypeID"] == 517]
+   latest_retail.sort( reverse=True, key=lambda x : x["id"] )
+   latest_retail = latest_retail[0]
+   print( f"   - Retail  : {latest_retail['id']} - {latest_retail['name']}" )
+   print( f"   - Classic : {latest_classic['id']} - {latest_classic['name']}" )
 
-zip_path = f"{config['name']}-{config['version']}.zip"
-print( f" - Zipping: {zip_path}" )
-zip_package( zip_path )
+   gameVersions = []
 
-if not command_args.yesokay:
-   print( f" - You can view the package under {package_folder}/ before publishing." )
    if config.get( "classic", False ):
-      print( f" - Current UI version is {cache['toc_classic']}. If incorrect, cancel this, correct Wowpedia, and delete {CACHEFILE}." )
+      gameVersions.append( latest_classic["id"] )
+      print( " - This project is being published to Classic WoW." )
+
    else:
-      print( f" - Current UI version is {cache['toc_retail']}. If incorrect, cancel this, correct Wowpedia, and delete {CACHEFILE}." )
-   input( " - Press any key to continue or Ctrl+C to cancel." )
+      gameVersions.append( latest_retail["id"] )
+      print( " - This project is being published to Retail WoW." )
 
-print( " - Fetching game version data from CurseForge..." )
-version_data = json.loads(curse_request( f"/api/game/versions" ))
+   releaseType = "release"
+   if re.search( "alpha", config['version'], re.IGNORECASE ):
+      releaseType = "alpha"
+   elif re.search( "beta", config['version'], re.IGNORECASE ):
+      releaseType = "beta"
 
-# 517 is wow retail, 67408 is wow classic
-latest_classic = [x for x in version_data if x["gameVersionTypeID"] == 67408]
-latest_classic.sort( reverse=True, key=lambda x : x["id"] )
-latest_classic = latest_classic[0]
-latest_retail = [x for x in version_data if x["gameVersionTypeID"] == 517]
-latest_retail.sort( reverse=True, key=lambda x : x["id"] )
-latest_retail = latest_retail[0]
-print( f"   - Retail  : {latest_retail['id']} - {latest_retail['name']}" )
-print( f"   - Classic : {latest_classic['id']} - {latest_classic['name']}" )
+   print( " - Uploading..." )
 
-gameVersions = []
+   gitlog = subprocess.check_output( ["git", "log", "-10"] ).decode('utf-8')
 
-if config.get( "classic", False ):
-   gameVersions.append( latest_classic["id"] )
-   print( " - This project is being published to Classic WoW." )
+   metadata = json.dumps({
+      "changelog"    : gitlog,
+      "changelogType" : "text",
+      "displayName"  : config['version'],
+      "gameVersions" : gameVersions,
+      "releaseType"  : releaseType
+   })
 
-else:
-   gameVersions.append( latest_retail["id"] )
-   print( " - This project is being published to Retail WoW." )
+   response = requests.post(
+      f"https://wow.curseforge.com/api/projects/{config['curse-project-id']}/upload-file",
+      headers = { "X-Api-Token" : forgetoken },
+      data    = { "metadata" : metadata },
+      files   = { "file": (zip_path, open( zip_path, "rb" )) }
+   )
 
-releaseType = "release"
-if re.search( "alpha", config['version'], re.IGNORECASE ):
-   releaseType = "alpha"
-elif re.search( "beta", config['version'], re.IGNORECASE ):
-   releaseType = "beta"
+   if( response.status_code != 200 ):
+      print( " - Bad status from upload." )
+      return False
 
-print( " - Uploading..." )
+   print( " - Upload complete.", response.text )
+   write_published( config["version"] )
+   return True
 
-gitlog = subprocess.check_output( ["git", "log", "-10"] ).decode('utf-8')
+#-----------------------------------------------------------------------------------------
+def publish_to_github():
+   tagname = config["version"]
 
-metadata = json.dumps({
-   "changelog"    : gitlog,
-   "changelogType" : "text",
-   "displayName"  : config['version'],
-   "gameVersions" : gameVersions,
-   "releaseType"  : releaseType
-})
+   parse_github = re.match(r"^https://github.com/([^/]+)/([^/]+)$")
+   github_owner = parse_github.group(1)
+   github_repo  = parse_github.group(2)
+   
+   release_name = config["name"] + " " + config["version"]
 
-response = requests.post(
-   f"https://wow.curseforge.com/api/projects/{config['project-id']}/upload-file",
-   headers = { "X-Api-Token" : forgetoken },
-   data    = { "metadata" : metadata },
-   files   = { "file": (zip_path, open( zip_path, "rb" )) }
-)
+   response = requests.post(
+      f"https://api.github.com/repos/{github_owner}/{github_repo}/releases",
+      headers = {
+         "Accept": "application/vnd.github+json",
+         "Authorization" : "token " + command_args.github_token
+      },
+      json = {
+         "tag_name": config["version"],
+         "name": release_name
+      },
+   )
 
-if( response.status_code != 200 ):
-   print( " - Bad status from upload." )
-   exit( EXIT_CODE_FAILED_UPLOAD )
+if command_args.publish_curseforge:
+   publish_to_curseforge()
 
-print( " - Upload complete.", response.text )
+if command_args.create_github_release:
+   publish_to_github()
 
-write_published( config["version"] )
 save_cache()
