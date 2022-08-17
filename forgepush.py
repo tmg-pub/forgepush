@@ -361,7 +361,7 @@ def publish_to_curseforge():
 def publish_to_github():
    tagname = config["version"]
 
-   parse_github = re.match(r"^https://github.com/([^/]+)/([^/]+)$")
+   parse_github = re.match(r"^https://github.com/([^/]+)/([^/]+)$", config["github"])
    github_owner = parse_github.group(1)
    github_repo  = parse_github.group(2)
    
