@@ -333,7 +333,7 @@ def publish_to_curseforge():
 
    print( " - Uploading..." )
 
-   gitlog = subprocess.check_output( ["git", "log", "-10"] ).decode('utf-8')
+   gitlog = subprocess.check_output( ["git", "log", "-10", '--pretty=format:"%s [%an] - %as%n%b"'] ).decode('utf-8')
 
    metadata = json.dumps({
       "changelog"    : gitlog,
@@ -385,8 +385,8 @@ def publish_to_github():
    zip_package( zip_path )
 
    with open(zip_path, "rb") as f:
-      print("uploading asset to", response.upload_path)
-      print(requests.post(response.upload_path.replace("{?name,label}", f"?name={zip_path}"),
+      print("uploading asset to", response["upload_path"])
+      print(requests.post(response["upload_path"].replace("{?name,label}", f"?name={zip_path}"),
          headers = {
             "Content-Type": "application/zip",
             "Authorization" : "token " + command_args.github_token
