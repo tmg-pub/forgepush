@@ -287,6 +287,7 @@ def publish_to_curseforge():
    gitstatus = subprocess.check_output( ["git", "status", "-s"] ).strip()
    if gitstatus != b"":
       print( " - Working directory is not clean. Not continuing." )
+      print(gitstatus)
       return False
 
    zip_path = f"{config['name']}-{config['version']}.zip"
@@ -365,7 +366,7 @@ def publish_to_github():
    github_owner = parse_github.group(1)
    github_repo  = parse_github.group(2)
    
-   release_name = config["name"] + " " + config["version"]
+   release_name = config["name"] + " " + tagname
 
    response = requests.post(
       f"https://api.github.com/repos/{github_owner}/{github_repo}/releases",
@@ -374,22 +375,24 @@ def publish_to_github():
          "Authorization" : "token " + command_args.github_token
       },
       json = {
-         "tag_name": config["version"],
+         "tag_name": tagname,
          "name": release_name
       },
    ).json()
 
-   zip_path = f"{config['name']}-{config['version']}.zip"
-   print( f" - Zipping: {zip_path}" )
+   zip_path = f"{config['name']}-{tagname}.zip"
+   print( f"zipping: {zip_path}" )
    zip_package( zip_path )
 
-   with open(zip_package, "rb") as f:
-      requests.post(response.upload_path.replace("{?name,label}", f"?name={zip_path}"),
+   with open(zip_path, "rb") as f:
+      print("uploading asset to", response.upload_path)
+      print(requests.post(response.upload_path.replace("{?name,label}", f"?name={zip_path}"),
          headers = {
             "Content-Type": "application/zip",
             "Authorization" : "token " + command_args.github_token
          },
-         data = f)
+         data = f))
+   print("Done.")
 
 if command_args.publish_curseforge:
    publish_to_curseforge()
