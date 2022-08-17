@@ -379,7 +379,8 @@ def publish_to_github():
          "name": release_name
       },
    ).json()
-
+   print("Got response from github:", response)
+   
    zip_path = f"{config['name']}-{tagname}.zip"
    print( f"zipping: {zip_path}" )
    zip_package( zip_path )
